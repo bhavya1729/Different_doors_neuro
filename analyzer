@@ -10,7 +10,7 @@ BIDS_folder = os.getcwd()
 output_folder="./figures"
 os.makedirs(output_folder, exist_ok=True)
 condition_labels={1:"Unlearnable",2:"Learnable"}
-condition_colour={"Unlearnable":"#DC143C","Learnable":"#07315B"}
+condition_colour={"Unlearnable":"#A36231","Learnable":"#0072B2"}
 
 #load data
 def load_data(bids_folder):
@@ -62,7 +62,7 @@ def cal_learning_curve(df):
 participant_curves, group_curves = cal_learning_curve(responded)
  
  
-# Ploting Learning curves
+# Ploting Learning curve
 fig, ax = plt.subplots(figsize=(10, 5))
 
 
@@ -98,3 +98,204 @@ plt.tight_layout()
 plt.savefig(os.path.join(output_folder, 'learning_curves.png'))
 plt.show()
 print("Saved: learning_curves.png")
+
+
+#reaction time vs learning condition
+# removing noise considering less tham 100ms is impossible and more 3 secs is distraction
+rt_clean = responded[
+   (responded['rt'] > 0.1) &   
+   (responded['rt'] < 3.0)   
+].copy()
+ 
+print(f"\nRT outliers removed: {len(responded) - len(rt_clean)} trials")
+ 
+rt_participant = (
+    rt_clean.groupby(['participant','conditions','trialNum'])['rt']
+    .mean()
+    .reset_index()
+)
+
+rt_group = (
+    rt_participant.groupby(['conditions','trialNum'])['rt']
+    .agg(['mean','sem'])
+    .reset_index()
+)
+
+
+
+ 
+print("\nRT summary (ms):")
+print(rt_group.groupby('conditions')[['mean', 'sem']].mean() * 1000)
+
+
+ 
+ 
+# RT distributions
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+
+ 
+# Left: RT distribution by condition
+for condition in ['Learnable', 'Unlearnable']:
+   subset = rt_clean[rt_clean['conditions'] == condition]['rt'] * 1000
+ 
+ 
+   axes[0].hist(
+       subset,
+       bins=50,            
+       alpha=0.6,          
+       color=condition_colour[condition],
+       label=condition,
+       density=True       
+   )
+ 
+axes[0].set_xlabel('Reaction time (ms)', fontsize=12)
+axes[0].set_ylabel('Density', fontsize=12)
+axes[0].set_title('RT distributions by condition', fontsize=13)
+axes[0].legend()
+sns.despine(ax=axes[0])
+ 
+# Right: RT as codition progress
+rt_by_trial = (
+   rt_clean.groupby(['conditions', 'trialNum'])['rt']
+   .mean()
+   .reset_index()
+)
+ 
+for condition in ['Learnable', 'Unlearnable']:
+   subset = rt_by_trial[rt_by_trial['conditions'] == condition]
+   axes[1].plot(
+       subset['trialNum'],
+       subset['rt'] * 1000,
+       color=condition_colour[condition],
+       linewidth=2.5,
+       label=condition
+   )
+ 
+axes[1].set_xlabel('Trial number within block', fontsize=12)
+axes[1].set_ylabel('Mean RT (ms)', fontsize=12)
+axes[1].set_title('RT across block trials', fontsize=13)
+axes[1].legend()
+sns.despine(ax=axes[1])
+ 
+plt.tight_layout()
+plt.savefig(os.path.join(output_folder, 'reaction_times.png'))
+plt.show()
+
+
+# win stay lose shift 
+def cal_wsls(df):
+   
+ 
+   results = []
+   
+ 
+   for participant in df['participant'].unique():
+      
+ 
+       for condition in [1, 2]:
+ 
+           subset = df[
+               (df['participant'] == participant) &
+               (df['condition'] == condition)
+           ].sort_values(['blockNum', 'trialNum'])
+           
+ 
+          
+           prev_outcome  = subset['outcome'].shift(1)
+           prev_response = subset['response'].shift(1)
+           prev_block    = subset['blockNum'].shift(1)
+ 
+           
+           stayed = (subset['response'].values == prev_response.values)
+           
+           same_block = (subset['blockNum'].values == prev_block.values)
+           
+ 
+           prev_win  = (prev_outcome.values == 1) & same_block
+           prev_loss = (prev_outcome.values == 2) & same_block
+           
+ 
+           
+           win_stay = stayed[prev_win].mean() if prev_win.sum() > 0 else np.nan
+           
+ 
+           lose_shift = (~stayed[prev_loss]).mean() if prev_loss.sum() > 0 else np.nan
+           
+ 
+           results.append({
+               'participant': participant,
+               'condition': condition,
+               'condition_name': condition_labels[condition],
+               'win_stay': win_stay,
+               'lose_shift': lose_shift
+           })
+ 
+   return pd.DataFrame(results)
+   
+ 
+ 
+wsls = cal_wsls(responded)
+ 
+
+
+learnable_ws   = wsls[wsls['condition'] == 2]['win_stay'].dropna()
+unlearnable_ws = wsls[wsls['condition'] == 1]['win_stay'].dropna()
+
+
+ 
+t_stat, p_val = stats.ttest_rel(learnable_ws, unlearnable_ws)
+
+
+ 
+print(f"\nWin-stay: Learnable={learnable_ws.mean():.3f}, "
+     f"Unlearnable={unlearnable_ws.mean():.3f}")
+print(f"Paired t-test: t={t_stat:.3f}, p={p_val:.4f}")
+ 
+ 
+# ploting WSLS rates
+fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+ 
+for i, (metric, title) in enumerate([('win_stay', 'Win-Stay Rate'),
+                                      ('lose_shift', 'Lose-Shift Rate')]):
+   
+ 
+   sns.barplot(
+       data=wsls,
+       x='condition_name',
+       y=metric,
+       palette=condition_colour,
+       errorbar='se',   
+       ax=axes[i]
+   )
+
+ 
+   
+   for _, row_learn in wsls[wsls['condition'] == 2].iterrows():
+       
+ 
+       row_unlearn = wsls[
+           (wsls['condition'] == 1) &
+           (wsls['participant'] == row_learn['participant'])
+       ]
+       if len(row_unlearn) > 0:
+           axes[i].plot(
+               [0, 1],  
+               [row_unlearn[metric].values[0], row_learn[metric]],
+               color='gray', alpha=0.3, linewidth=0.8, zorder=1
+               
+           )
+ 
+   axes[i].set_title(title, fontsize=13, fontweight='bold')
+   axes[i].set_xlabel('')
+   axes[i].set_ylabel('Rate (proportion of trials)', fontsize=11)
+   axes[i].set_ylim(0, 1)
+   sns.despine(ax=axes[i])
+ 
+plt.suptitle('Win-Stay / Lose-Shift Strategy', fontsize=15, fontweight='bold', y=1.02)
+
+
+ 
+plt.tight_layout()
+plt.savefig(os.path.join(output_folder, 'wsls_strategy.png'))
+plt.show()
