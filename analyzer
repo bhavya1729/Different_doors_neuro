@@ -299,3 +299,48 @@ plt.suptitle('Win-Stay / Lose-Shift Strategy', fontsize=15, fontweight='bold', y
 plt.tight_layout()
 plt.savefig(os.path.join(output_folder, 'wsls_strategy.png'))
 plt.show()
+<<<<<<< Updated upstream
+=======
+
+# whether participants have a bias to stay with their option
+# overall stay rate per participant
+stay_rate = responded.sort_values(['participant','blockNum','trialNum']).copy()
+
+stay_rate['prev_response'] = stay_rate.groupby(['participant','condition'])['response'].shift(1)
+
+stay_rate = stay_rate.dropna(subset=['prev_response'])
+stay_rate['stay'] = (stay_rate['response'] == stay_rate['prev_response']).astype(int)
+
+participant_stay = stay_rate.groupby('participant')['stay'].mean()
+
+# testing against chance (0.5)
+t_stat, p_val = stats.ttest_1samp(participant_stay, 0.5)
+
+print("\n--- Stay bias test ---")
+print(f"Mean stay rate = {participant_stay.mean():.3f}")
+print(f"t = {t_stat:.3f}, p = {p_val:.6f}")
+
+plt.figure(figsize=(6,5))
+
+mean_stay = participant_stay.mean()
+mean_switch = 1 - mean_stay
+
+sns.barplot(
+    x=["Stay", "Switch"],
+    y=[mean_stay, mean_switch],
+    palette=["#0D7BBB", "#BD611B"]
+)
+
+plt.axhline(0.5, color='gray', linestyle='--', label='Chance (50%)')
+plt.ylim(0,1)
+
+plt.title("Do participants prefer staying or switching?")
+plt.ylabel("Proportion of choices")
+plt.legend()
+
+sns.despine()
+plt.tight_layout()
+plt.savefig(os.path.join(output_folder, 'stay_bias_test.png'))
+plt.show()
+
+>>>>>>> Stashed changes
