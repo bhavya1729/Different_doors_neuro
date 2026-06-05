@@ -1,0 +1,100 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy import stats
+import glob
+import os
+
+BIDS_folder = os.getcwd()
+output_folder="./figures"
+os.makedirs(output_folder, exist_ok=True)
+condition_labels={1:"Unlearnable",2:"Learnable"}
+condition_colour={"Unlearnable":"#DC143C","Learnable":"#07315B"}
+
+#load data
+def load_data(bids_folder):
+    pattern= os.path.join(bids_folder,'sub-*', 'beh', '*_beh.tsv')
+    files= glob.glob(pattern)
+    files=sorted(files)
+    print(f"Found {len(files)} participant files")
+
+    all_dfs=[]
+    for filepath in files:
+        df=pd.read_csv(filepath,sep="\t")
+        filename=os.path.basename(filepath)
+        participant_no=filename.split("_")[0]
+        df["participant"]=participant_no
+        all_dfs.append(df)
+    complete =pd.concat(all_dfs, axis=0, ignore_index=True)
+
+    return complete
+    
+#data cleaning and potential
+data = load_data(BIDS_folder)
+print(f"total trail data loaded is {len(data)}")
+print(data.head())
+print(data.isnull().sum())   #missing values per column
+
+data["conditions"] = data["condition"].map(condition_labels)
+data["responded"]= data["responded"].astype(bool)
+missed=data["responded"]==False
+print(f'{missed.sum()} missed trails out of {len(data)}')
+responded = data[data["responded"]].copy()
+print(f"{len(responded)}responded trails ")
+
+#learning curve
+def cal_learning_curve(df):
+
+    learning = (
+        df.groupby(['participant', 'conditions', 'trialNum'])['optimal']
+        .mean()
+        .reset_index()
+   )
+    group_curves = (
+       learning.groupby(['conditions', 'trialNum'])['optimal']
+       .agg(['mean', 'sem'])  # compute mean AND standard error
+       .reset_index()
+   )
+    group_curves.columns = ['condition_name', 'trialNum', 'mean_optimal', 'sem_optimal']
+    return learning,group_curves
+   
+participant_curves, group_curves = cal_learning_curve(responded)
+ 
+ 
+# Ploting Learning curves
+fig, ax = plt.subplots(figsize=(10, 5))
+
+
+ 
+for condition in ['Learnable', 'Unlearnable']:
+    subset = group_curves[group_curves['condition_name'] == condition]
+    ax.plot(
+       subset['trialNum'],        
+       subset['mean_optimal'],    
+       linewidth=2.5,
+       label=condition           
+   )
+ 
+   # shade area to represent SEM of the mean
+    ax.fill_between(
+       subset['trialNum'],
+       subset['mean_optimal'] - subset['sem_optimal'],  
+       subset['mean_optimal'] + subset['sem_optimal'],  
+       alpha=0.2  ) 
+   
+ax.axhline(y=0.5, color='gray', linestyle='--', linewidth=1, alpha=0.7, label='Chance (50%)')
+
+ 
+ax.set_xlabel('Trial number within block', fontsize=13)
+ax.set_ylabel('Proportion optimal choices', fontsize=13)
+ax.set_title('Learning curves by condition', fontsize=15, fontweight='bold')
+ax.legend(fontsize=11)
+ax.set_ylim(0.3, 0.9)
+
+ax.set_xticks(range(1, 21))
+sns.despine() 
+plt.tight_layout()
+plt.savefig(os.path.join(output_folder, 'learning_curves.png'))
+plt.show()
+print("Saved: learning_curves.png")
