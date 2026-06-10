@@ -49,3 +49,5 @@ Participants exhibited a clear stay bias, meaning they were more likely to repea
 This finding provides a possible explanation for the relatively low Lose Shift rates observed in the WSLS analysis. Even after receiving a loss, participants often continued selecting the same option rather than switching, suggesting the presence of choice perseveration or habit-like behavior during the task.
 
 Inference: The behavioural analysis shows that people do learn in learnable blocks, but imperfectly. They are slowed down by a stay bias that causes them to miss update opportunities.
+
+Sub-01 had 4 bad channels, 4 ICA components removed (blinks), and 100% of epochs survived rejection. The PSD shows clean 1/f slope with no 60 Hz contamination. Data quality is acceptable. 
