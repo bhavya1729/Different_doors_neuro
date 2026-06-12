@@ -1,8 +1,7 @@
 # Different_doors_neuro
-
-The project aims to analyze [Diiferet_doors experimental data set]
+The project aims to analyze Diiferet doors experimental data set (a 40-participant EEG dataset) and identify whether brain generates stronger error signals when feedback is informative and learnable compared to when it is random and unlearnable.
 ### Data source: 
-(https://openneuro.org/datasets/ds007647/versions/1.0.1) by Abigail Oloriz and Cameron D. Hassall (2026). Different Doors. OpenNeuro. [Dataset] doi: doi:10.18112/openneuro.ds007647.v1.0.1
+[Diiferet_doors experimental data set](https://openneuro.org/datasets/ds007647/versions/1.0.1) by Abigail Oloriz and Cameron D. Hassall (2026). Different Doors. OpenNeuro. [Dataset] doi: doi:10.18112/openneuro.ds007647.v1.0.1
 
 Experiment: Forty participants selected one of two doors, then received feedback indicating either a monetary gain or loss. Blocks lasted 20 trials and, unbeknownst to participants, were of two types. In learnable blocks, one of the doors was better because choosing it was associated with a 60% likelihood of a win. The other door only paid out 10% of the time. In unlearnable blocks, outcomes were not yoked to participant actions but were instead drawn from the learnable blocks and presented in random order. Thus, the win and loss totals were matched across the block types. There were 20 blocks in total (10 of each type), and each block was followed by a short survey asking which door was better, and whether the participant had fun, felt motivated, and did well.
 
