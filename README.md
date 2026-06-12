@@ -90,6 +90,6 @@ p = 0.467
 Cohen's d = 0.114
 The FRN did not differ significantly between conditions. Although the unlearnable condition produced a slightly more negative FRN, the effect was very small and not statistically reliable.
 
-Note
+##### Note:
 Since this analysis was done independently, the possibility that some mistake in preprocessing, FRN measurement or analysis contributed to the null result cannot be ruled out
 Another question is whether participants may have treated learnable and unlearnable blocks similarly. Since they were never explicitly told which type of block they were in, is it possible that they continued searching for patterns and learning opportunities in both conditions? 
