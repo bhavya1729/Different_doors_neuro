@@ -172,9 +172,9 @@ for condition in ['Learnable', 'Unlearnable']:
        label=condition
    )
  
-axes[1].set_xlabel('Trial number within block', fontsize=12)
+axes[1].set_xlabel('Trial number within condition', fontsize=12)
 axes[1].set_ylabel('Mean RT (ms)', fontsize=12)
-axes[1].set_title('RT across block trials', fontsize=13)
+axes[1].set_title('RT across conditions', fontsize=13)
 axes[1].legend()
 sns.despine(ax=axes[1])
  
@@ -292,15 +292,14 @@ for i, (metric, title) in enumerate([('win_stay', 'Win-Stay Rate'),
    axes[i].set_ylim(0, 1)
    sns.despine(ax=axes[i])
  
-plt.suptitle('Win-Stay / Lose-Shift Strategy', fontsize=15, fontweight='bold', y=1.02)
+plt.suptitle('Win-Stay / Lose-Shift Strategy', fontsize=9, fontweight='bold', y=0.97)
 
 
  
 plt.tight_layout()
 plt.savefig(os.path.join(output_folder, 'wsls_strategy.png'))
 plt.show()
-<<<<<<< Updated upstream
-=======
+
 
 # whether participants have a bias to stay with their option
 # overall stay rate per participant
@@ -334,7 +333,7 @@ sns.barplot(
 plt.axhline(0.5, color='gray', linestyle='--', label='Chance (50%)')
 plt.ylim(0,1)
 
-plt.title("Do participants prefer staying or switching?")
+plt.title("Do participants prefer staying over switching?")
 plt.ylabel("Proportion of choices")
 plt.legend()
 
@@ -343,4 +342,3 @@ plt.tight_layout()
 plt.savefig(os.path.join(output_folder, 'stay_bias_test.png'))
 plt.show()
 
->>>>>>> Stashed changes
