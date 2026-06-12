@@ -1,0 +1,516 @@
+import mne
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec 
+import seaborn as sns 
+from scipy import stats
+import os
+import glob
+
+
+ 
+ 
+# load data
+
+preprocessed_folder = './preprocessed'
+output_folder = './results'
+figures_folder = './figures/eeg'
+ 
+os.makedirs(output_folder,  exist_ok=True)
+os.makedirs(figures_folder, exist_ok=True)
+ 
+FRN_TMIN = 0.200  # 200ms after feedback
+FRN_TMAX = 0.350  # 350ms after feedback
+
+
+FRN_ELECTRODE = 'FCz'
+CONDITIONS = {
+   'learnable':   {'win': 'win/learnable',   'loss': 'loss/learnable'},
+   'unlearnable': {'win': 'win/unlearnable', 'loss': 'loss/unlearnable'},
+}
+ 
+COLORS = {
+   'win/learnable':    '#2E8B57',   
+   'loss/learnable':   '#D4713A',   
+   'win/unlearnable':  "#34AD6C",   
+   'loss/unlearnable': "#E99A5E",   
+   'diff/learnable':   "#87D924",   
+   'diff/unlearnable': "#C17920",   
+}
+
+
+def load_all_epochs(preprocessed):
+ 
+   pattern = os.path.join(preprocessed, '*_feedback_epochs-epo.fif')
+   files   = sorted(glob.glob(pattern))
+ 
+   if len(files) == 0:
+       raise FileNotFoundError(
+           f"No epoch files found at: {pattern}\n"
+       )
+ 
+   epochs_dict = {}
+ 
+   for filepath in files:
+       basename = os.path.basename(filepath)
+       participant = basename.split('_')[0]
+       epochs = mne.read_epochs(filepath, verbose=False, preload=True)
+       epochs_dict[participant] = epochs
+ 
+   participant_ids = sorted(epochs_dict.keys())
+   print(f"Loaded epochs for {len(participant_ids)} participants")
+ 
+   return epochs_dict, participant_ids
+ 
+ 
+epochs_dict, participant_ids = load_all_epochs(preprocessed_folder)
+print("\nEpoch counts per participant:")
+for pid in participant_ids:
+    ep = epochs_dict[pid]
+    counts = {cond: len(ep[cond]) for cond in ep.event_id}
+    print(f"  {pid}: {counts}")
+
+ 
+
+
+#Computing individual Evoked objects and Grand Averages 
+ 
+def compute_grand_averages(epochs_dict, participant_ids):
+   
+   all_conditions = list(epochs_dict[participant_ids[0]].event_id.keys())
+   print(f"Conditions: {all_conditions}")
+ 
+   individual_evokeds = {cond: [] for cond in all_conditions}
+ 
+   for participant in participant_ids:
+       epochs = epochs_dict[participant]
+ 
+       for cond in all_conditions:
+           if cond not in epochs.event_id:
+               print(f"  Warning: {participant} missing condition '{cond}'")
+               continue
+ 
+           if len(epochs[cond]) == 0:
+               print(f"  Warning: {participant} has 0 epochs for '{cond}'")
+               continue
+ 
+           evoked = epochs[cond].average()
+           individual_evokeds[cond].append(evoked)
+ 
+   grand_averages = {}
+   for cond, evoked_list in individual_evokeds.items():
+       if len(evoked_list) == 0:
+           print(f"  Skipping {cond} — no data")
+           continue
+ 
+       grand_averages[cond] = mne.grand_average(evoked_list)
+       print(f"  Grand average '{cond}': n={len(evoked_list)} participants")
+ 
+   return individual_evokeds, grand_averages
+ 
+ 
+individual_evokeds, grand_averages = compute_grand_averages(
+   epochs_dict, participant_ids
+)
+
+
+
+
+# Computing Difference Waves
+ 
+def compute_difference_wave(evoked_loss, evoked_win):
+
+
+   diff = evoked_loss.copy()
+ 
+   diff.data = evoked_loss.data - evoked_win.data
+   return diff
+ 
+ 
+diff_learnable   = compute_difference_wave(
+   grand_averages['loss/learnable'],
+   grand_averages['win/learnable']
+)
+ 
+diff_unlearnable = compute_difference_wave(
+   grand_averages['loss/unlearnable'],
+   grand_averages['win/unlearnable']
+)
+ 
+ 
+
+
+#Measuring FRN Amplitude 
+ 
+def measure_frn_amplitude(evoked, channel, tmin, tmax):
+ 
+   ch_idx = evoked.ch_names.index(channel)
+   times = evoked.times
+   time_mask = (times >= tmin) & (times <= tmax) 
+   amplitude = evoked.data[ch_idx, time_mask] 
+   return np.mean(amplitude) * 1e6
+   
+results_rows = []
+ 
+for participant in participant_ids:
+   epochs = epochs_dict[participant]
+   row    = {'participant': participant}
+ 
+   for block_type in ['learnable', 'unlearnable']:
+       win_key  = f'win/{block_type}'
+       loss_key = f'loss/{block_type}'
+ 
+       if win_key not in epochs.event_id or loss_key not in epochs.event_id:
+           row[f'frn_{block_type}'] = np.nan
+           continue
+       evoked_win  = epochs[win_key].average()
+       evoked_loss = epochs[loss_key].average()
+       print(evoked_win.ch_names)
+       amp_win  = measure_frn_amplitude(evoked_win,  FRN_ELECTRODE, FRN_TMIN, FRN_TMAX)
+       amp_loss = measure_frn_amplitude(evoked_loss, FRN_ELECTRODE, FRN_TMIN, FRN_TMAX)
+ 
+       row[f'amp_win_{block_type}']  = amp_win
+       row[f'amp_loss_{block_type}'] = amp_loss
+       row[f'frn_{block_type}']      = amp_loss - amp_win
+   row['n_epochs_win_learn']    = len(epochs['win/learnable'])  
+   row['n_epochs_win_learn'] = (
+        len(epochs['win/learnable'])
+        if 'win/learnable' in epochs.event_id
+        else 0
+    )
+   row['n_epochs_loss_learn'] = (
+        len(epochs['loss/learnable'])
+        if 'loss/learnable' in epochs.event_id
+        else 0
+    )
+   row['n_epochs_win_unlearn'] = (
+        len(epochs['win/unlearnable'])
+        if 'win/unlearnable' in epochs.event_id
+        else 0
+    )
+   row['n_epochs_loss_unlearn'] = (
+        len(epochs['loss/unlearnable'])
+        if 'loss/unlearnable' in epochs.event_id
+        else 0
+    )
+   results_rows.append(row)
+ 
+results_df = pd.DataFrame(results_rows)
+ 
+print("\nFRN amplitudes (µV), mean across participants:")
+print(results_df[['frn_learnable', 'frn_unlearnable']].describe().round(3))
+ 
+#Statistical Tests
+clean = results_df[['frn_learnable', 'frn_unlearnable']].dropna()
+ 
+n = len(clean)
+print(f"N (complete pairs): {n}")
+ 
+t_stat, p_val = stats.ttest_rel(
+   clean['frn_learnable'],
+   clean['frn_unlearnable']
+)
+
+
+# Cohen's d effect size
+mean_diff = clean['frn_learnable'].mean() - clean['frn_unlearnable'].mean()
+#average of (learnable FRN - unlearnable FRN) across participants
+ 
+pooled_std = np.sqrt(
+   (clean['frn_learnable'].std()**2 + clean['frn_unlearnable'].std()**2) / 2
+)
+
+
+ 
+cohens_d = mean_diff / pooled_std
+print(f"\nFRN Learnable:   mean={clean['frn_learnable'].mean():.3f} µV, "
+     f"SD={clean['frn_learnable'].std():.3f}")
+print(f"FRN Unlearnable: mean={clean['frn_unlearnable'].mean():.3f} µV, "
+     f"SD={clean['frn_unlearnable'].std():.3f}")
+print(f"\nPaired t-test: t({n-1}) = {t_stat:.3f}, p = {p_val:.4f}")
+# t(n-1): degrees of freedom for paired t-test = n - 1
+print(f"Cohen's d = {cohens_d:.3f}")
+print(f"Effect size: {'small' if abs(cohens_d) < 0.5 else 'medium' if abs(cohens_d) < 0.8 else 'large'}")
+ 
+ 
+# Plotting grand average ERP
+ 
+fig = plt.figure(figsize=(14, 10))
+gs  = gridspec.GridSpec(2, 2, figure=fig, hspace=0.45, wspace=0.3)
+ 
+ax_learn   = fig.add_subplot(gs[0, 0])  # Top-left: learnable condition
+ax_unlearn = fig.add_subplot(gs[0, 1])  # Top-right: unlearnable condition
+ax_diff    = fig.add_subplot(gs[1, 0])  # Bottom-left: difference waves
+ax_topo    = fig.add_subplot(gs[1, 1])  # Bottom-right: topographic map
+ 
+times_ms = grand_averages['win/learnable'].times * 1000
+ 
+fz_idx = grand_averages['win/learnable'].ch_names.index(FRN_ELECTRODE)
+ 
+for cond, label, color, lw in [
+   ('win/learnable',  'Win',  COLORS['win/learnable'],  2.5),
+   ('loss/learnable', 'Loss', COLORS['loss/learnable'], 2.5),
+]:
+   amp = grand_averages[cond].data[fz_idx, :] * 1e6
+   ax_learn.plot(times_ms, amp, label=label, color=color, linewidth=lw)
+ 
+   indiv = np.array([
+       ev.data[fz_idx, :] * 1e6
+       for ev in individual_evokeds[cond]
+   ])
+
+
+ 
+   se = indiv.std(axis=0) / np.sqrt(len(indiv))
+ 
+   ax_learn.fill_between(
+       times_ms,
+       amp - se,
+       amp + se,
+       color=color, alpha=0.15
+   )
+ 
+ax_learn.axvline(0, color='black', linestyle='--', lw=1, alpha=0.5)
+ax_learn.axhline(0, color='black', linestyle='-',  lw=0.5, alpha=0.3)
+ax_learn.axvspan(FRN_TMIN*1000, FRN_TMAX*1000, alpha=0.1, color='gray')
+ 
+ax_learn.invert_yaxis()
+ 
+ax_learn.set_title('A. Learnable blocks', fontsize=13, fontweight='bold', loc='left')
+ax_learn.set_xlabel('Time (ms)', fontsize=11)
+ax_learn.set_ylabel('Amplitude (µV)', fontsize=11)
+ax_learn.set_xlim(-200, 800)
+ax_learn.legend(fontsize=10)
+ax_learn.text(275, ax_learn.get_ylim()[1]*0.85, 'FRN', ha='center',
+             fontsize=9, color='gray', style='italic')
+sns.despine(ax=ax_learn)
+ 
+ 
+for cond, label, color in [
+   ('win/unlearnable',  'Win',  COLORS['win/unlearnable']),
+   ('loss/unlearnable', 'Loss', COLORS['loss/unlearnable']),
+]:
+   amp    = grand_averages[cond].data[fz_idx, :] * 1e6
+   indiv  = np.array([ev.data[fz_idx, :] * 1e6 for ev in individual_evokeds[cond]])
+   se     = indiv.std(axis=0) / np.sqrt(len(indiv))
+ 
+   ax_unlearn.plot(times_ms, amp, label=label, color=color, linewidth=2.5)
+   ax_unlearn.fill_between(times_ms, amp - se, amp + se, color=color, alpha=0.15)
+ 
+ax_unlearn.axvline(0, color='black', linestyle='--', lw=1, alpha=0.5)
+ax_unlearn.axhline(0, color='black', linestyle='-',  lw=0.5, alpha=0.3)
+ax_unlearn.axvspan(FRN_TMIN*1000, FRN_TMAX*1000, alpha=0.1, color='gray')
+ax_unlearn.invert_yaxis()
+ax_unlearn.set_title('B. Unlearnable blocks', fontsize=13, fontweight='bold', loc='left')
+ax_unlearn.set_xlabel('Time (ms)', fontsize=11)
+ax_unlearn.set_ylabel('Amplitude (µV)', fontsize=11)
+ax_unlearn.set_xlim(-200, 800)
+ax_unlearn.legend(fontsize=10)
+sns.despine(ax=ax_unlearn)
+ 
+ 
+ 
+for diff_evoked, label, color, lw in [
+   (diff_learnable,   'Learnable',   COLORS['diff/learnable'],   2.5),
+   (diff_unlearnable, 'Unlearnable', COLORS['diff/unlearnable'], 2.5),
+]:
+   amp   = diff_evoked.data[fz_idx, :] * 1e6
+   ax_diff.plot(times_ms, amp, label=label, color=color, linewidth=lw)
+ 
+ax_diff.axvline(0,   color='black', linestyle='--', lw=1,   alpha=0.5)
+ax_diff.axhline(0,   color='black', linestyle='-',  lw=0.5, alpha=0.3)
+ax_diff.axvspan(FRN_TMIN*1000, FRN_TMAX*1000, alpha=0.1, color='gray',
+               label='FRN window (200–350ms)')
+ 
+ax_diff.invert_yaxis()
+ax_diff.set_title('C. Difference waves (Loss − Win)', fontsize=13, fontweight='bold', loc='left')
+ax_diff.set_xlabel('Time (ms)', fontsize=11)
+ax_diff.set_ylabel('Amplitude (µV)', fontsize=11)
+ax_diff.set_xlim(-200, 800)
+ax_diff.legend(fontsize=10)
+sns.despine(ax=ax_diff)
+ 
+ 
+ 
+
+
+diff_learn_topo = diff_learnable.copy().crop(FRN_TMIN, FRN_TMAX)
+topo_data = diff_learn_topo.data.mean(axis=1) * 1e6
+ 
+mne.viz.plot_topomap(
+   topo_data,
+   diff_learn_topo.info,
+   axes=ax_topo,
+   show=False,
+   cmap='RdBu_r',
+   vlim=(-3, 3),
+   contours=6,
+   sensors=True,
+)
+ 
+ax_topo.set_title('D. Topomap: FRN (Loss−Win, Learnable)\n200–350ms',
+                 fontsize=13, fontweight='bold', loc='left')
+ 
+ 
+fig.suptitle(
+   f'Feedback-Related Negativity (FRN) N={len(participant_ids)} participants, electrode {FRN_ELECTRODE}\n'
+   f't({n-1})={t_stat:.2f}, p={p_val:.4f}, d={cohens_d:.2f}',
+   fontsize=13, y=1.01
+)
+ 
+plt.savefig(
+   os.path.join(figures_folder, 'grand_average_erp.png'),
+   dpi=300, bbox_inches='tight'
+)
+plt.show()
+ 
+
+
+# Plotting FRN stats
+ 
+fig2, axes2 = plt.subplots(1, 2, figsize=(12, 6))
+
+
+ax_paired = axes2[0]
+ 
+for _, row in results_df.dropna(subset=['frn_learnable','frn_unlearnable']).iterrows():
+   ax_paired.plot(
+       [0, 1],
+       [row['frn_unlearnable'], row['frn_learnable']],
+       color='gray', alpha=0.25, linewidth=1, zorder=1
+   )
+
+
+for x_pos, cond_col, color, label in [
+   (0, 'frn_unlearnable', COLORS['diff/unlearnable'], 'Unlearnable'),
+   (1, 'frn_learnable',   COLORS['diff/learnable'],   'Learnable'),
+]:
+   vals = results_df[cond_col].dropna()
+   mean = vals.mean()
+   se   = vals.sem()
+
+
+ 
+   ax_paired.errorbar(
+       x_pos, mean,
+       yerr=se,
+       fmt='o',
+       color=color,
+       markersize=12,
+       capsize=6,
+       linewidth=2.5,
+       zorder=3,
+       label=label
+   )
+ 
+ax_paired.axhline(0, color='black', linestyle='--', lw=1, alpha=0.4)
+ax_paired.set_xticks([0, 1])
+ax_paired.set_xticklabels(['Unlearnable', 'Learnable'], fontsize=12)
+ax_paired.set_ylabel('FRN amplitude (µV)\nLoss − Win at Fz', fontsize=11)
+ax_paired.set_title('A. FRN by condition\n(each line = one participant)',
+                   fontsize=12, fontweight='bold', loc='left')
+ 
+y_max = results_df[['frn_learnable','frn_unlearnable']].max().max()
+ax_paired.plot([0, 1], [y_max*1.1, y_max*1.1], 'k-', lw=1.5)
+
+
+p_text = f'p = {p_val:.4f}' if p_val >= 0.001 else 'p < 0.001'
+ax_paired.text(0.5, y_max*1.15, p_text, ha='center', fontsize=11)
+
+
+ 
+sns.despine(ax=ax_paired)
+ 
+ 
+ax_scatter = axes2[1]
+ 
+results_df['frn_difference'] = results_df['frn_learnable'] - results_df['frn_unlearnable']
+
+
+ 
+ax_scatter.scatter(
+   results_df['frn_learnable'],
+   results_df['frn_unlearnable'],
+   color='steelblue', alpha=0.7, s=60, zorder=3
+   # s=60 = marker size (points²)
+)
+ 
+
+
+lim = max(abs(results_df[['frn_learnable','frn_unlearnable']].min().min()),
+         abs(results_df[['frn_learnable','frn_unlearnable']].max().max())) * 1.1
+ax_scatter.plot([-lim, lim], [-lim, lim], 'k--', lw=1, alpha=0.4, label='x = y')
+
+
+ 
+ax_scatter.axhline(0, color='gray', lw=0.8, alpha=0.4)
+ax_scatter.axvline(0, color='gray', lw=0.8, alpha=0.4)
+ 
+ax_scatter.set_xlabel('FRN — Learnable (µV)', fontsize=11)
+ax_scatter.set_ylabel('FRN — Unlearnable (µV)', fontsize=11)
+ax_scatter.set_title('B. Learnable vs Unlearnable FRN\n(each dot = one participant)',
+                    fontsize=12, fontweight='bold', loc='left')
+ax_scatter.legend(fontsize=10)
+sns.despine(ax=ax_scatter)
+ 
+fig2.suptitle('FRN Amplitude Analysis', fontsize=14, fontweight='bold')
+plt.tight_layout()
+plt.savefig(
+   os.path.join(figures_folder, 'frn_statistics.png'),
+   dpi=300, bbox_inches='tight'
+)
+plt.show()
+print("✓ Saved: frn_statistics.png")
+ 
+ 
+# Plotting temporal topography 
+ 
+times_to_plot = [0.100, 0.200, 0.250, 0.300, 0.350, 0.500]
+ 
+fig3, axes3 = plt.subplots(2, len(times_to_plot), figsize=(16, 6))
+
+
+ 
+for row_idx, (block_type, diff_evoked) in enumerate([
+   ('Learnable',   diff_learnable),
+   ('Unlearnable', diff_unlearnable),
+]):
+   for col_idx, t in enumerate(times_to_plot):
+       ax = axes3[row_idx, col_idx]
+ 
+
+
+       t_idx = np.argmin(np.abs(diff_evoked.times - t))
+       topo_data = diff_evoked.data[:, t_idx] * 1e6
+       mne.viz.plot_topomap(
+           topo_data,
+           diff_evoked.info,
+           axes=ax,
+           show=False,
+           cmap='RdBu_r',
+           vlim=(-4, 4),
+           contours=4,
+           sensors=False  #    
+ )
+ 
+       ax.set_title(f'{int(t*1000)}ms', fontsize=10)
+ 
+       if col_idx == 0:
+           ax.set_ylabel(block_type, fontsize=11, fontweight='bold')
+           
+fig3.suptitle(
+   'Scalp distribution over time — Loss minus Win difference wave',
+   fontsize=13, fontweight='bold'
+)
+plt.tight_layout()
+plt.savefig(
+   os.path.join(figures_folder, 'topography_over_time.png'),
+   dpi=300, bbox_inches='tight'
+)
+plt.show()
+
+
+ 
+results_file = os.path.join(output_folder, 'frn_amplitudes.csv')
+results_df.to_csv(results_file, index=False)
