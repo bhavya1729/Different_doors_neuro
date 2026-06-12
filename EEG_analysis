@@ -1,0 +1,429 @@
+import mne
+import numpy as np 
+import matplotlib
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import os
+import glob
+
+BIDS_folder = os.getcwd()
+preprocessed_folder = './preprocessed'
+figures_folder = './figures/eeg'
+
+os.makedirs(preprocessed_folder, exist_ok=True)
+os.makedirs(figures_folder, exist_ok=True)
+
+# Find all participants
+all_eeg_files = sorted(
+    glob.glob(
+        os.path.join(
+            BIDS_folder,
+            'sub-*',
+            'eeg',
+            '*_eeg.vhdr'
+        )
+    )
+)
+
+print(f"Found {len(all_eeg_files)} participants to process")
+
+# Track who succeeded and who failed
+success = []
+failed = []
+
+for eeg_file in all_eeg_files:
+
+    participant = os.path.basename(
+        os.path.dirname(
+            os.path.dirname(eeg_file)
+        )
+    )
+
+    epochs_file = os.path.join(
+        preprocessed_folder,
+        f'{participant}_feedback_epochs-epo.fif'
+    )
+
+    # Skip if already processed
+    if os.path.exists(epochs_file):
+        print(f"  {participant}: already done, skipping")
+        success.append(participant)
+        continue
+
+    print(f"\n{'=' * 50}")
+    print(f"Processing: {participant}")
+    print(f"{'=' * 50}")
+    try:
+        LINE_NOISE_FREQ = 60       # Power line frequency in Canada
+ 
+        # Filtering parameters
+        HIGHPASS  = 0.1    # Hz — remove slow drifts (sweat, movement artifacts)
+        LOWPASS   = 40.0   # Hz — remove high-frequency muscle noise
+
+
+        
+        # Epoching parameters
+        EPOCH_TMIN = -0.2  # 200ms before the event (baseline period)
+        EPOCH_TMAX =  0.8  # 800ms after the event
+
+
+        EVENT_ID = {
+        'fixation/unlearnable':  1,
+        'stimulus/unlearnable':  2,
+        'left_press/unlearnable': 3,
+        'right_press/unlearnable': 4,
+        'win/unlearnable':        7,
+        'loss/unlearnable':       8,
+        'fixation/learnable':    11,
+        'stimulus/learnable':    12,
+        'left_press/learnable':  13,
+        'right_press/learnable': 14,
+        'win/learnable':         17,
+        'loss/learnable':        18,
+        }
+
+
+        
+        # Amplitude rejection threshold 
+        REJECT_CRITERIA = dict(eeg=150e-6)
+
+        eeg_file = os.path.join(
+        BIDS_folder,
+        participant,
+        'eeg',
+        f'{participant}_task-differentdoors_eeg.vhdr'
+        )
+        raw = mne.io.read_raw_brainvision(
+        eeg_file,
+        preload=True,
+        verbose=False    
+        )
+        SFREQ      = raw.info['sfreq']
+        N_CHANNELS = len(raw.ch_names)
+        DURATION   = raw.times[-1]
+        print(raw)
+        print(f"Sampling rate:    {raw.info['sfreq']} Hz")
+        print(f"Number of channels: {len(raw.ch_names)}") 
+        print(f"Duration:{raw.times[-1]:.1f} seconds ({raw.times[-1]/60:.1f} minutes)")
+        # counting from the end.
+        print(f"Channel names:\n{raw.ch_names}")
+
+        print("\nPlotting first 10 seconds of raw signal...")
+        fig_raw = raw.plot(
+        duration=10,        # Show 10 seconds at a time
+        n_channels=10,      # Show 10 channels at a time
+        scalings='auto',    # Auto-scale the amplitude display
+        title=f'{participant} — Raw EEG (first 10s)',
+        show=True,
+        block=True      
+        )
+        fig_psd, ax_psd = plt.subplots(figsize=(10, 4))
+        raw.compute_psd(fmax=80).plot(axes=ax_psd, show=False)
+        ax_psd.set_title(f'{participant} — Power Spectral Density (raw)', fontsize=13)
+        plt.tight_layout()
+        plt.savefig(os.path.join(figures_folder, f'{participant}_psd_raw.png'), dpi=150)
+        plt.show()
+
+        #setting up eog channels to detect eye movements and setting electrode layout:montage
+        print("\nChannel types detected:")
+        print(raw.get_channel_types())
+        eog_channels = [ch for ch in raw.ch_names if ch in ['HEOG', 'VEOG', 'EOG']]
+        if eog_channels:
+            raw.set_channel_types({ch: 'eog' for ch in eog_channels})
+            print(f"Set EOG channels: {eog_channels}")
+        try:
+            montage = mne.channels.make_standard_montage('standard_1020') 
+            raw.set_montage(montage, on_missing='warn')
+            print("Montage set: standard_1020")
+        except Exception as e:
+            print(f"Montage warning: {e}")
+            print("Continuing without montage (topoplots won't work)")
+
+        # Filtering 
+        
+        #Notch filter— remove power line noise
+        raw.notch_filter(
+        freqs=LINE_NOISE_FREQ,   # The frequency to remove (60 Hz)
+        method='fir',            # FIR = Finite Impulse Response filter
+        verbose=False
+        )
+
+
+        #Bandpass filter— keep only 0.1 to 40 Hz
+        raw.filter(
+        l_freq=HIGHPASS,    
+        h_freq=LOWPASS,     
+        method='fir',
+        fir_window='hamming',
+        verbose=False
+        )
+        
+        # PSD after filtering
+        fig_psd2, ax_psd2 = plt.subplots(figsize=(10, 4))
+        raw.compute_psd(fmax=80).plot(axes=ax_psd2, show=False)
+        ax_psd2.set_title(f'{participant} — PSD after filtering', fontsize=13)
+        plt.tight_layout()
+        plt.savefig(os.path.join(figures_folder, f'{participant}_psd_filtered.png'), dpi=150)
+        plt.show()
+
+
+        # Bad channels 
+        flat_threshold = 1e-13  
+        channel_vars = np.var(raw.get_data(picks='eeg'), axis=1)
+        flat_channels = [
+        raw.ch_names[i]
+        for i, v in enumerate(channel_vars)
+        if v < flat_threshold
+        ]
+        if flat_channels:
+            print(f"Flat channels detected: {flat_channels}")
+            raw.info['bads'].extend(flat_channels)
+        else:
+            print("No flat channels detected")
+
+        #selecting bad channels through visual inspection
+        print("\nOpening raw signal for visual inspection of bad channels...")
+        print("Instructions: Click on any bad channels to mark them")
+        raw.plot(
+        duration=20,
+        n_channels=len(raw.ch_names),
+        scalings='auto',
+        title=f'{participant} — Click to mark bad channels',
+        block=True
+        )
+        
+        print(f"\nBad channels marked: {raw.info['bads']}")
+        bad_channels = raw.info['bads'].copy()
+        n_bad_channels = len(bad_channels)
+
+        if raw.info['bads']:
+            raw.interpolate_bads(reset_bads=True)
+            print(f"Interpolated {n_bad_channels} bad channels")
+        else:
+            print("No interpolation needed")
+        
+        # Rereferencing
+        raw.set_eeg_reference('average', projection=False)
+        print("Re-referenced to average")
+
+        # Extract events from annotations
+        
+        events, event_id_found = mne.events_from_annotations(raw)
+        print(f"Total events found: {len(events)}")
+        print("Event types found:")
+        for name, code in event_id_found.items():
+            count = (events[:, 2] == code).sum()
+            print(f"  Code {code:3d} ({name}): {count} events")
+        
+        # Ploting event timing across the recording
+        fig_events = mne.viz.plot_events(
+        events,
+        sfreq=raw.info['sfreq'],
+        first_samp=raw.first_samp,
+        # first_samp accounts for recordings that don't start at sample 0.
+        event_id=EVENT_ID,
+        show=False
+        )
+        fig_events.suptitle(f'{participant} — Event markers')
+        plt.savefig(os.path.join(figures_folder, f'{participant}_events.png'))
+        plt.show()
+
+
+        # ICA 
+        raw_for_ica = raw.copy().filter(l_freq=1.0, h_freq=None, verbose=False)
+
+
+        ica = mne.preprocessing.ICA(
+        n_components=20, 
+        method="infomax",
+        max_iter=800, 
+        random_state=42
+        )
+        
+        ica.fit(raw_for_ica, picks='eeg')
+        print(ica.n_components_)
+        print(f"ICA fitted ({ica.n_components_} components extracted)")
+
+        ica.plot_components(
+        title=f'{participant} — ICA Components'
+        )
+        ica.plot_sources(raw, title=f'{participant} — ICA Sources', block=True)
+
+        #detecting eye artefact components
+        eog_indices, eog_scores = ica.find_bads_eog(
+        raw,
+        ch_name='Fp2',
+        threshold=0.5
+        )
+        print(eog_indices)
+        print(len(eog_indices))
+       
+        print(f"Eye artefact components detected: {eog_indices}")
+        ica.plot_scores(
+        eog_scores,
+        exclude=eog_indices,
+        title=f'{participant} — ICA-EOG Correlation Scores'
+        )
+        plt.savefig(os.path.join(figures_folder, f'{participant}_ica_scores.png'))
+        
+        bad_components = input(
+        "Enter ICA components to exclude (comma separated): "
+        )
+        ica.exclude = [int(x) for x in bad_components.split(",")]
+        print(f"Components to exclude: {ica.exclude}")
+        raw_clean = raw.copy()
+        ica.apply(raw_clean)
+        print("ICA applied — artefacts remove")
+        fig, axes = plt.subplots(2, 1, figsize=(15, 6), sharex=True)
+        start_time = 60.0  
+        end_time   = 70.0  
+        
+        start_sample = int(start_time * SFREQ) 
+        end_sample   = int(end_time * SFREQ) 
+        channel_to_plot = 'Fp1'
+        
+        ch_idx = raw.ch_names.index(channel_to_plot)
+        times_window = raw.times[start_sample:end_sample]
+        axes[0].plot(
+        times_window,
+        raw._data[ch_idx, start_sample:end_sample] * 1e6,  # convert V → µV
+        color='steelblue', linewidth=0.8
+        )
+        axes[0].set_title(f'Before ICA — {channel_to_plot}', fontsize=12)
+        axes[0].set_ylabel('Amplitude (µV)', fontsize=11)
+        
+        axes[1].plot(
+        times_window,
+        raw_clean._data[ch_idx, start_sample:end_sample] * 1e6,
+        color='darkorange', linewidth=0.8
+        )
+        axes[1].set_title(f'After ICA — {channel_to_plot}', fontsize=12)
+        axes[1].set_ylabel('Amplitude (µV)', fontsize=11)
+        axes[1].set_xlabel('Time (seconds)', fontsize=11)
+        
+        plt.suptitle(f'{participant} — Effect of ICA on {channel_to_plot}', fontsize=13)
+        plt.tight_layout()
+        plt.savefig(os.path.join(figures_folder, f'{participant}_ica_comparison.png'))
+        plt.show()
+
+
+
+
+
+
+        #Epoching 
+        
+        feedback_event_id = {
+        'win/unlearnable':  7,
+        'loss/unlearnable': 8,
+        'win/learnable':   17,
+        'loss/learnable':  18,
+        }
+
+
+        
+        epochs = mne.Epochs(
+        raw_clean,          
+        events,             # the events array (n_events × 3)
+        event_id=feedback_event_id,   # which events to epoch
+        tmin=EPOCH_TMIN,    # start of epoch (-0.2 s = 200ms before event)
+        tmax=EPOCH_TMAX,    # end of epoch (+0.8 s = 800ms after event)
+        
+        baseline=(EPOCH_TMIN, 0),
+        picks='eeg', 
+        reject=REJECT_CRITERIA, 
+        preload=True,       # Load all epoch data into RAM immediately
+        verbose=False
+        )
+        
+        print(f"  Total epochs: {len(epochs)}")
+        #Breakdown:
+        for cond in feedback_event_id.keys():
+            if cond in epochs.event_id:
+                print(f"    {cond}: {len(epochs[cond])} epochs")
+        
+        # How many were rejected?
+        n_original = sum((events[:, 2] == code).sum()
+                        for code in feedback_event_id.values())
+        n_kept     = len(epochs)
+        n_rejected = n_original - n_kept
+        print(f"\n  Rejected epochs: {n_rejected} / {n_original} "
+            f"({100 * n_rejected / n_original:.1f}%)")
+        fig_ep = epochs.plot_image(
+        picks='FCz',
+        
+        title=f'{participant} — All feedback epochs at FCz',
+        show=False
+        )
+        plt.savefig(os.path.join(figures_folder, f'{participant}_epoch_image.png'),
+                dpi=150, bbox_inches='tight')
+        plt.show()
+        epochs_file = os.path.join(preprocessed_folder, f'{participant}_feedback_epochs-epo.fif') 
+        epochs.save(epochs_file, overwrite=True)
+
+        #avg ERP
+        evoked_win_learn    = epochs['win/learnable'].average()
+        evoked_loss_learn   = epochs['loss/learnable'].average()
+        evoked_win_unlearn  = epochs['win/unlearnable'].average()
+        evoked_loss_unlearn = epochs['loss/unlearnable'].average()
+
+
+        fig_erp, ax_erp = plt.subplots(figsize=(10, 5))
+        times = evoked_win_learn.times * 1000  # convert seconds → milliseconds
+        
+        for evoked, label, color, ls in [
+        (evoked_win_learn,   'Win / Learnable',     '#2E8B57', '-'),
+        (evoked_loss_learn,  'Loss / Learnable',    '#D4713A', '-'),
+        (evoked_win_unlearn, 'Win / Unlearnable',   '#2E8B57', '--'),
+        (evoked_loss_unlearn,'Loss / Unlearnable',  '#D4713A', '--'),
+        ]:
+        
+            fcz_idx = evoked.ch_names.index('FCz')
+            amplitude = evoked.data[fcz_idx, :] * 1e6  # V → µV
+            
+            ax_erp.plot(times, amplitude, label=label, color=color,
+                        linestyle=ls, linewidth=2)
+        
+        ax_erp.axvline(x=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+        
+        ax_erp.axhline(y=0, color='black', linestyle='-', linewidth=0.5, alpha=0.3)
+        
+        ax_erp.set_xlabel('Time relative to feedback (ms)', fontsize=12)
+        ax_erp.set_ylabel('Amplitude (µV)', fontsize=12)
+        ax_erp.set_title(f'{participant} — ERP preview at FCz\n'
+                        f'(Full analysis in Step 3)', fontsize=13)
+        ax_erp.legend(fontsize=10)
+        ax_erp.set_xlim(-200, 800) 
+        ax_erp.invert_yaxis()
+        
+        
+        ax_erp.axvspan(200, 350, alpha=0.1, color='gray')
+        ax_erp.text(275, ax_erp.get_ylim()[0] * 0.9, 'FRN\nwindow',
+                ha='center', fontsize=9, color='gray')
+        
+        
+        matplotlib.rcParams['axes.spines.top']   = False
+        matplotlib.rcParams['axes.spines.right'] = False
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(figures_folder, f'{participant}_erp_preview.png'))
+        plt.show()
+        epoch_survival = 100 * n_kept / n_original
+        success.append(participant)
+        print(f"{participant} complete")
+        epochs_file = os.path.join(preprocessed_folder,f'{participant}_feedback_epochs-epo.fif'
+        )
+        epochs.save(epochs_file, overwrite=True)
+
+    except Exception as e:
+        failed.append((participant, str(e)))
+        print(f"{participant} FAILED: {e}")
+        continue
+
+# Final report
+print(f"\n{'='*50}")
+print(f"BATCH COMPLETE")
+print(f"  Succeeded: {len(success)}")
+print(f"  Failed:    {len(failed)}")
+for pid, err in failed:
+    print(f"    {pid}: {err}")
